@@ -1,13 +1,19 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:particles_flutter/particles_engine.dart';
-import 'package:particles_flutter/component/particle/particle.dart';
-import 'services/ics_service.dart';
-import 'models/event.dart';
 import 'package:intl/intl.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
+import 'services/ics_service.dart';
+import 'models/event.dart';
+import 'widgets/event_display.dart';
+import 'widgets/particles_widget.dart';
+import 'widgets/animated_text.dart';
+import 'utils/date_helpers.dart';
+import 'themes/colors.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('fr_FR', null);
   runApp(MyApp());
 }
 
@@ -18,6 +24,7 @@ class MyApp extends StatelessWidget {
       title: 'Agenda App',
       theme: ThemeData(
         primarySwatch: Colors.blue,
+        fontFamily: 'Roboto',
       ),
       home: EventListScreen(),
     );
@@ -30,211 +37,323 @@ class EventListScreen extends StatefulWidget {
 }
 
 class _EventListScreenState extends State<EventListScreen> {
-  String selectedGroup = '1A'; // Valeur par défaut
-  late Future<List<Event>> futureEvents;
+  String selectedLevel = 'BUT1';
+  String selectedGroup = '1A';
+  late List<Future<List<Event>>> futureEventsForWeek;
+  DateTime selectedDate = DateTime.now();
+  int currentPageIndex = DateTime.now().weekday - 1;
+  bool isWeekend = false;
+  bool showParticles = false; // Désactive les particules par défaut
 
-  // Liste des liens pour les groupes
-  final Map<String, String> groupLinks = {
-    '1A': 'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/677.ics',
-    '1B': 'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/678.ics',
-    '2A': 'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/680.ics',
-    '2B': 'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/681.ics',
-    '3A': 'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/683.ics',
-    '3B': 'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/684.ics',
-    '4A': 'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/686.ics',
-    '4B': 'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/687.ics',
+  late Map<String, Color> currentTheme = currentColors;
+
+  final Map<String, Map<String, String>> groupLinks = {
+    'BUT1': {
+      '1A':
+          'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/677.ics',
+      '1B':
+          'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/678.ics',
+      '2A':
+          'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/680.ics',
+      '2B':
+          'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/681.ics',
+      '3A':
+          'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/683.ics',
+      '3B':
+          'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/684.ics',
+      '4A':
+          'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/686.ics',
+      '4B':
+          'https://flopedt.iut-blagnac.fr/fr/ics/INFO/structural_group/687.ics',
+    },
+    'BUT2': {
+      '1A': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/691.ics',
+      '1B': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/692.ics',
+      '2A': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/694.ics',
+      '2B': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/695.ics',
+      '3A': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/697.ics',
+    },
+    'BUT3': {
+      '1A': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/504.ics',
+      '1B': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/505.ics',
+      '2A': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/506.ics',
+      '2B': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/507.ics',
+      '3A': 'https://flopedt.iut-blagnac.fr/fr/ics/structural_group/705.ics',
+    },
   };
 
   @override
   void initState() {
     super.initState();
+    futureEventsForWeek = []; // Initialise avec une liste vide
     _loadSelectedGroup();
   }
 
   Future<void> _loadSelectedGroup() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      selectedGroup =
-          prefs.getString('selectedGroup') ?? '1A'; // Valeur par défaut
-      futureEvents = fetchEventsForGroup(selectedGroup);
+      selectedLevel = prefs.getString('selectedLevel') ?? 'BUT1';
+      selectedGroup = prefs.getString('selectedGroup') ?? '1A';
+      futureEventsForWeek = _fetchEventsForWeek();
     });
   }
 
-  Future<void> _saveSelectedGroup(String group) async {
+  Future<void> _saveSelectedGroup(String level, String group) async {
     final prefs = await SharedPreferences.getInstance();
+    prefs.setString('selectedLevel', level);
     prefs.setString('selectedGroup', group);
   }
 
-  Future<List<Event>> fetchEventsForGroup(String group) async {
-    final url = groupLinks[group]!;
-    return await ICSService().fetchEvents(url);
+  Future<void> _selectDay() async {
+    final today = DateTime.now();
+    final firstDayOfWeek = isWeekend
+        ? today.add(Duration(days: 8 - today.weekday))
+        : today.subtract(Duration(days: today.weekday - 1));
+    final daysOfWeek =
+        List.generate(5, (index) => firstDayOfWeek.add(Duration(days: index)));
+
+    final selectedDate = await showDialog<DateTime>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: currentTheme['background'],
+          title: Text('Sélectionnez un jour',
+              style: TextStyle(color: currentTheme['primaryText'])),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: daysOfWeek.map((date) {
+                final formattedDate =
+                    DateFormat('EEEE d MMMM', 'fr_FR').format(date);
+                return ListTile(
+                  title: Text(formattedDate,
+                      style: TextStyle(color: currentTheme['primaryText'])),
+                  onTap: () {
+                    Navigator.of(context).pop(date);
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+        );
+      },
+    );
+    if (selectedDate != null) {
+      setState(() {
+        this.selectedDate = selectedDate;
+        currentPageIndex =
+            daysOfWeek.indexWhere((date) => date.day == selectedDate.day);
+        futureEventsForWeek = _fetchEventsForWeek();
+      });
+    }
+  }
+
+  Future<List<Event>> fetchEventsForGroup(
+      String level, String group, DateTime date) async {
+    final url = groupLinks[level]![group]!;
+    return await ICSService().fetchEvents(url, date);
+  }
+
+  List<Future<List<Event>>> _fetchEventsForWeek() {
+    final today = DateTime.now();
+    final firstDayOfWeek = today.subtract(Duration(days: today.weekday - 1));
+    return List.generate(5, (index) {
+      final date = firstDayOfWeek.add(Duration(days: index));
+      return fetchEventsForGroup(selectedLevel, selectedGroup, date);
+    });
+  }
+
+  String getDisplayedDay(DateTime date) {
+    return DateFormat('EEEE', 'fr_FR').format(date);
   }
 
   @override
   Widget build(BuildContext context) {
     double screenHeight = MediaQuery.of(context).size.height;
     double screenWidth = MediaQuery.of(context).size.width;
+    final weekdays = List.generate(5, (index) {
+      final today = DateTime.now();
+      final firstDayOfWeek = today.subtract(Duration(days: today.weekday - 1));
+      return firstDayOfWeek.add(Duration(days: index));
+    });
 
     return Scaffold(
       body: Stack(
         children: [
-          // Fond de particules
           Positioned.fill(
             child: Container(
-              color: Colors.black, // Couleur de fond sombre
-              child: Particles(
-                awayRadius:
-                    100, // Réduit la distance à laquelle les particules se déplacent lorsqu'elles sont éloignées
-                particles: createParticles(),
+              color: currentTheme['background'],
+            ),
+          ),
+          if (showParticles)
+            Positioned.fill(
+              child: ParticlesWidget(
                 height: screenHeight,
                 width: screenWidth,
-                onTapAnimation: true,
-                awayAnimationDuration: const Duration(milliseconds: 150),
-                awayAnimationCurve: Curves.easeOut,
-                enableHover: true,
-                hoverRadius: 60,
-                connectDots: false,
               ),
             ),
-          ),
-
-          // En-tête flottant
           Positioned(
             top: 20,
-            left: 0,
-            right: 0,
+            left: 20,
+            right: 20,
             child: Container(
               padding: EdgeInsets.all(16.0),
-              color:
-                  Colors.black.withOpacity(0.7), // Fond légèrement transparent
-              child: Text(
-                'Flop By Solo',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
+              decoration: BoxDecoration(
+                color: currentTheme['headerBackground'],
+                borderRadius: BorderRadius.circular(20.0),
               ),
+              child: AnimatedText(),
             ),
           ),
-
-          // Interface utilisateur principale
           Positioned(
-            top: 80, // Ajustez cette valeur selon la hauteur de l'en-tête
+            top: 25,
+            right: 20,
+            child: PopupMenuButton<String>(
+              onSelected: (String value) {
+                setState(() {
+                  if (value == 'Particules O/F') {
+                    showParticles = !showParticles;
+                  } else if (value == 'Changer de thème') {
+                    currentTheme = currentTheme == currentColors
+                        ? newColors
+                        : currentColors;
+                  }
+                });
+              },
+              icon: Icon(
+                Icons.menu,
+                color: currentTheme['menuIcon'],
+                size: 35,
+              ),
+              color: currentTheme['background'],
+              itemBuilder: (BuildContext context) {
+                return {'Particules O/F', 'Changer de thème'}
+                    .map((String choice) {
+                  return PopupMenuItem<String>(
+                    value: choice,
+                    child: Text(
+                      choice,
+                      style: TextStyle(
+                        color: currentTheme['primaryText'],
+                      ),
+                    ),
+                  );
+                }).toList();
+              },
+            ),
+          ),
+          Positioned(
+            top: 80,
             bottom: 0,
             left: 0,
             right: 0,
             child: Column(
               children: [
+                SizedBox(height: 30),
                 Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: DropdownButton<String>(
-                    value: selectedGroup,
-                    onChanged: (String? newValue) {
-                      setState(() {
-                        selectedGroup = newValue!;
-                        futureEvents = fetchEventsForGroup(selectedGroup);
-                        _saveSelectedGroup(selectedGroup);
-                      });
-                    },
-                    dropdownColor:
-                        Colors.grey[800], // Couleur de fond du menu déroulant
-                    style: TextStyle(
-                      color: Colors.cyan, // Couleur du texte du menu déroulant
-                      fontSize: 18, // Taille du texte
-                      fontWeight: FontWeight.bold, // Poids du texte
-                    ),
-                    items: groupLinks.keys
-                        .map<DropdownMenuItem<String>>((String value) {
-                      return DropdownMenuItem<String>(
-                        value: value,
+                  padding: const EdgeInsets.symmetric(horizontal: 26.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      GestureDetector(
+                        onTap: _selectDay,
                         child: Text(
-                          'BUT1 $value',
+                          getDisplayedDay(weekdays[currentPageIndex]),
                           style: TextStyle(
-                            color: Colors
-                                .cyan, // Couleur du texte des éléments du menu
-                            fontSize:
-                                18, // Taille du texte des éléments du menu
-                            fontWeight: FontWeight.bold, // Poids du texte
+                            color: currentTheme['primaryText'],
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                      );
-                    }).toList(),
+                      ),
+                      Row(
+                        children: [
+                          DropdownButton<String>(
+                            value: selectedLevel,
+                            onChanged: (String? newLevel) {
+                              if (newLevel != null) {
+                                setState(() {
+                                  selectedLevel = newLevel;
+                                  selectedGroup =
+                                      groupLinks[selectedLevel]!.keys.first;
+                                  futureEventsForWeek = _fetchEventsForWeek();
+                                  _saveSelectedGroup(
+                                      selectedLevel, selectedGroup);
+                                });
+                              }
+                            },
+                            dropdownColor: currentTheme['background'],
+                            style: TextStyle(
+                              color: currentTheme['primaryText'],
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            items: groupLinks.keys
+                                .map<DropdownMenuItem<String>>((String value) {
+                              return DropdownMenuItem<String>(
+                                value: value,
+                                child: Text(value),
+                              );
+                            }).toList(),
+                            underline: Container(),
+                            iconEnabledColor: currentTheme['primaryText'],
+                            iconDisabledColor: currentTheme['primaryText'],
+                          ),
+                          SizedBox(width: 20),
+                          DropdownButton<String>(
+                            value: selectedGroup,
+                            onChanged: (String? newGroup) {
+                              if (newGroup != null) {
+                                setState(() {
+                                  selectedGroup = newGroup;
+                                  futureEventsForWeek = _fetchEventsForWeek();
+                                  _saveSelectedGroup(
+                                      selectedLevel, selectedGroup);
+                                });
+                              }
+                            },
+                            dropdownColor: currentTheme['background'],
+                            style: TextStyle(
+                              color: currentTheme['primaryText'],
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            items: groupLinks[selectedLevel]!
+                                .keys
+                                .map<DropdownMenuItem<String>>((String value) {
+                              return DropdownMenuItem<String>(
+                                value: value,
+                                child: Text(value),
+                              );
+                            }).toList(),
+                            underline: Container(),
+                            iconEnabledColor: currentTheme['primaryText'],
+                            iconDisabledColor: currentTheme['primaryText'],
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
                 Expanded(
-                  child: FutureBuilder<List<Event>>(
-                    future: futureEvents,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return Center(child: CircularProgressIndicator());
-                      } else if (snapshot.hasError) {
-                        return Center(
-                            child: Text('Erreur: ${snapshot.error}',
-                                style: TextStyle(color: Colors.orange)));
-                      } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                        return Center(
-                            child: Text(
-                          'Aucun cours pour aujourd\'hui.',
-                          style: TextStyle(
-                            color: Colors.lightGreen, // Couleur du texte
-                            fontSize: 22, // Taille du texte
-                            fontWeight: FontWeight.bold, // Poids du texte
-                            shadows: [
-                              Shadow(
-                                offset: Offset(1, 1),
-                                color: Colors.black.withOpacity(0.7),
-                                blurRadius: 8,
-                              ),
-                            ],
-                          ),
-                        ));
-                      } else {
-                        final events = snapshot.data!;
-                        return ListView(
-                          children: events.map((event) {
-                            final formattedStart =
-                                DateFormat('HH:mm').format(event.start);
-                            final formattedEnd =
-                                DateFormat('HH:mm').format(event.end);
-                            final formattedDate = event.getFormattedDate();
-
-                            return ListTile(
-                              title: Text(
-                                event.summary,
-                                style: TextStyle(
-                                  color: Colors.pink, // Couleur du texte
-                                  fontSize: 18, // Taille du texte
-                                  fontWeight: FontWeight.bold, // Poids du texte
-                                  shadows: [
-                                    Shadow(
-                                      offset: Offset(1, 1),
-                                      color: Colors.black.withOpacity(0.7),
-                                      blurRadius: 8,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              subtitle: Text(
-                                '$formattedDate\n$formattedStart - $formattedEnd\nSalle: ${event.location}',
-                                style: TextStyle(
-                                  color: Colors.lightBlue, // Couleur du texte
-                                  fontSize: 16, // Taille du texte
-                                  fontWeight: FontWeight.bold, // Poids du texte
-                                  shadows: [
-                                    Shadow(
-                                      offset: Offset(1, 1),
-                                      color: Colors.black.withOpacity(0.7),
-                                      blurRadius: 8,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        );
-                      }
+                  child: PageView.builder(
+                    itemCount: 5, // Nombre de jours de la semaine
+                    controller: PageController(initialPage: currentPageIndex),
+                    onPageChanged: (index) {
+                      setState(() {
+                        currentPageIndex = index;
+                      });
+                    },
+                    itemBuilder: (context, index) {
+                      return Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: EventDisplay(
+                          futureEvents: futureEventsForWeek.isNotEmpty
+                              ? futureEventsForWeek[index]
+                              : Future.value([]),
+                          currentTheme: currentTheme,
+                        ),
+                      );
                     },
                   ),
                 ),
@@ -244,36 +363,5 @@ class _EventListScreenState extends State<EventListScreen> {
         ],
       ),
     );
-  }
-
-  List<Particle> createParticles() {
-    var rng = Random();
-    List<Particle> particles = [];
-    List<Color> colors = [
-      Colors.white,
-      Colors.green,
-      Colors.red,
-      Colors.yellow,
-    ];
-    for (int i = 0; i < 40; i++) {
-      // Réduit le nombre de particules
-      particles.add(Particle(
-        color: colors[rng.nextInt(colors.length)]
-            .withOpacity(0.4), // Couleurs des particules
-        size: rng.nextDouble() * 6 +
-            2, // Taille ajustée pour une meilleure visibilité
-        velocity: Offset(
-            rng.nextDouble() *
-                50 *
-                randomSign(), // Réduit la vitesse des particules
-            rng.nextDouble() * 50 * randomSign()),
-      ));
-    }
-    return particles;
-  }
-
-  double randomSign() {
-    var rng = Random();
-    return rng.nextBool() ? 1 : -1;
   }
 }

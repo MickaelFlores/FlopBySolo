@@ -2,7 +2,7 @@ import 'package:http/http.dart' as http;
 import '../models/event.dart';
 
 class ICSService {
-  Future<List<Event>> fetchEvents(String url) async {
+  Future<List<Event>> fetchEvents(String url, DateTime selectedDate) async {
     final response = await http.get(Uri.parse(url));
 
     if (response.statusCode == 200) {
@@ -11,10 +11,10 @@ class ICSService {
       events.sort((a, b) =>
           a.start.compareTo(b.start)); // Tri des événements par date de début
 
-      // Filtrer les événements pour n'inclure que ceux du jour
-      final today = DateTime.now();
-      final startOfDay = DateTime(today.year, today.month, today.day);
-      final endOfDay = startOfDay.add(Duration(days: 1));
+      // Filtrer les événements pour n'inclure que ceux du jour sélectionné
+      DateTime startOfDay =
+          DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+      DateTime endOfDay = startOfDay.add(Duration(days: 1));
 
       return events
           .where((event) =>
