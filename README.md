@@ -1,3 +1,3 @@
-# flopedtapplication
+# Flop edt pour android
 
-A new Flutter project.
+Mon premier projet sur Flutter pour une app Android.
